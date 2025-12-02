@@ -5,9 +5,19 @@ export enum PokemonType {
   WATER = 'Water',
   GRASS = 'Grass',
   ELECTRIC = 'Electric',
+  ICE = 'Ice',
+  FIGHTING = 'Fighting',
+  POISON = 'Poison',
+  GROUND = 'Ground',
+  FLYING = 'Flying',
   PSYCHIC = 'Psychic',
+  BUG = 'Bug',
   ROCK = 'Rock',
-  GHOST = 'Ghost'
+  GHOST = 'Ghost',
+  DRAGON = 'Dragon',
+  STEEL = 'Steel',
+  DARK = 'Dark',
+  FAIRY = 'Fairy'
 }
 
 export enum MoveCategory {
@@ -54,6 +64,16 @@ export interface Pokemon {
   isPlayer: boolean;
 }
 
+export interface Item {
+  id: string;
+  name: string;
+  description: string;
+  effectType: 'HEAL_HP' | 'HEAL_PP' | 'BUFF_ATK' | 'BUFF_DEF' | 'REVIVE';
+  value: number; // HP amount or Stat multiplier
+  count: number;
+  icon: string;
+}
+
 export enum NodeType {
   START = 'START',
   COMBAT = 'COMBAT',
@@ -88,6 +108,7 @@ export enum GameStatus {
 export interface GameState {
   status: GameStatus;
   player: Pokemon;
+  bag: Item[];
   currentEnemy: Pokemon | null;
   floor: number;
   map: MapNode[];
@@ -95,4 +116,9 @@ export interface GameState {
   loading: boolean;
   loadingMessage: string;
   battleLog: string[];
+  eventData?: {
+      title: string;
+      description: string;
+      choices: { text: string; action: () => void }[];
+  } | null;
 }

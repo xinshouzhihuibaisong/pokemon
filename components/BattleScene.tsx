@@ -1,13 +1,15 @@
 
 import React, { useState, useEffect } from 'react';
-import { Pokemon, Move, MoveCategory, PokemonType } from '../types';
+import { Pokemon, Move, MoveCategory, PokemonType, Item } from '../types';
 import Button from './Button';
-import { Sword, RotateCcw, Backpack, Footprints } from 'lucide-react';
+import { Sword, RotateCcw, Backpack, Footprints, X } from 'lucide-react';
 
 interface BattleSceneProps {
   player: Pokemon;
   enemy: Pokemon;
+  bag: Item[];
   onUseMove: (move: Move) => void;
+  onUseItem: (item: Item) => void;
   onRun: () => void;
   battleLog: string[];
   isPlayerTurn: boolean;
@@ -45,13 +47,14 @@ const HealthBar = ({ current, max, name, level, isPlayer }: { current: number, m
 const BattleScene: React.FC<BattleSceneProps> = ({
   player,
   enemy,
+  bag,
   onUseMove,
+  onUseItem,
   onRun,
   battleLog,
   isPlayerTurn,
   canAct
 }) => {
-  const [selectedMoveIndex, setSelectedMoveIndex] = useState<number | null>(null);
   const [menuState, setMenuState] = useState<'MAIN' | 'FIGHT' | 'BAG'>('MAIN');
 
   // Auto-scroll log
@@ -71,6 +74,9 @@ const BattleScene: React.FC<BattleSceneProps> = ({
         case PokemonType.PSYCHIC: return 'bg-pink-500 hover:bg-pink-400';
         case PokemonType.ROCK: return 'bg-stone-500 hover:bg-stone-400';
         case PokemonType.GHOST: return 'bg-purple-600 hover:bg-purple-500';
+        case PokemonType.DRAGON: return 'bg-indigo-600 hover:bg-indigo-500';
+        case PokemonType.STEEL: return 'bg-gray-400 hover:bg-gray-300';
+        case PokemonType.FAIRY: return 'bg-pink-300 hover:bg-pink-200';
         default: return 'bg-gray-400 hover:bg-gray-300';
     }
   };
@@ -130,7 +136,7 @@ const BattleScene: React.FC<BattleSceneProps> = ({
          </div>
 
          {/* Action Menu */}
-         <div className="w-[140px] md:w-[200px] bg-white/90 rounded border-l-4 border-b-4 border-gray-400 p-1 grid grid-cols-2 gap-1 text-gray-800 font-bold text-xs md:text-sm shadow-inner">
+         <div className="w-[140px] md:w-[200px] bg-white/90 rounded border-l-4 border-b-4 border-gray-400 p-1 grid grid-cols-2 gap-1 text-gray-800 font-bold text-xs md:text-sm shadow-inner overflow-hidden">
             {menuState === 'MAIN' && (
                 <>
                     <button 
@@ -187,9 +193,27 @@ const BattleScene: React.FC<BattleSceneProps> = ({
             )}
 
              {menuState === 'BAG' && (
-                <div className="col-span-2 flex flex-col items-center justify-center h-full bg-gray-100 rounded">
-                    <p className="text-[10px] text-gray-500">背包空空如也...</p>
-                    <button onClick={() => setMenuState('MAIN')} className="mt-2 text-xs bg-gray-300 px-3 py-1 rounded hover:bg-gray-400">返回</button>
+                <div className="col-span-2 flex flex-col h-full relative">
+                    <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1">
+                        {bag.length === 0 ? (
+                            <p className="text-[10px] text-gray-500 text-center mt-4">背包空空如也...</p>
+                        ) : (
+                            bag.map(item => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => onUseItem(item)}
+                                    className="flex items-center justify-between bg-white border border-gray-300 rounded p-1 hover:bg-gray-50 text-[10px] text-left"
+                                >
+                                    <div className="flex items-center gap-1">
+                                        <span>{item.icon}</span>
+                                        <span className="font-bold">{item.name}</span>
+                                    </div>
+                                    <span className="bg-gray-200 px-1 rounded-full text-[9px]">x{item.count}</span>
+                                </button>
+                            ))
+                        )}
+                    </div>
+                    <button onClick={() => setMenuState('MAIN')} className="mt-1 text-xs bg-gray-300 px-3 py-1 rounded hover:bg-gray-400 shrink-0">返回</button>
                 </div>
             )}
          </div>

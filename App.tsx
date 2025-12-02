@@ -1,14 +1,15 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
-  GameState, GameStatus, NodeType, MapNode, Pokemon, PokemonType, Move, MoveCategory 
+  GameState, GameStatus, NodeType, MapNode, Pokemon, PokemonType, Move, MoveCategory, Item 
 } from './types';
-import { STARTER_POKEMON, TYPE_CHART, getEffectiveness, REWARD_MOVES_POOL, createMove } from './constants';
+import { STARTER_POKEMON, TYPE_CHART, getEffectiveness, REWARD_MOVES_POOL, REWARD_ITEMS_POOL, createMove, createItem, ITEMS_DB } from './constants';
 import GameMap from './components/GameMap';
 import BattleScene from './components/BattleScene';
 import Button from './components/Button';
 import MoveCard from './components/CardComponent';
 import { generateEnemy, generateEventResult } from './services/geminiService';
-import { Award, Skull } from 'lucide-react';
+import { Award, Skull, Gift, HelpCircle } from 'lucide-react';
 
 const generateMap = (length: number = 10): MapNode[] => {
   const nodes: MapNode[] = [];
@@ -61,6 +62,7 @@ const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>({
     status: GameStatus.MENU,
     player: {} as Pokemon,
+    bag: [createItem('potion', 2)], // Start with 2 Potions
     currentEnemy: null,
     floor: 0,
     map: [],
@@ -71,6 +73,7 @@ const App: React.FC = () => {
   });
 
   const [rewardOptions, setRewardOptions] = useState<Move[]>([]);
+  const [rewardItem, setRewardItem] = useState<Item | null>(null);
   const [canAct, setCanAct] = useState(true);
 
   // --- Actions ---
@@ -89,6 +92,7 @@ const App: React.FC = () => {
     setGameState({
       status: GameStatus.MAP,
       player: starter,
+      bag: [createItem('potion', 2)],
       currentEnemy: null,
       floor: 0,
       map: generateMap(11),
@@ -103,6 +107,7 @@ const App: React.FC = () => {
     setGameState(prev => ({
       ...prev,
       currentNodeId: node.id,
+      floor: node.x,
       loading: true,
       loadingMessage: '探索中...'
     }));
@@ -123,8 +128,76 @@ const App: React.FC = () => {
     } else if (node.type === NodeType.REST) {
         setGameState(prev => ({ ...prev, status: GameStatus.REST, loading: false }));
     } else if (node.type === NodeType.EVENT) {
-        setGameState(prev => ({ ...prev, status: GameStatus.EVENT, loading: false }));
+        // Generate random event
+        const events = [
+            {
+                title: '神秘的喷泉',
+                description: '你发现了一个散发着光芒的喷泉。',
+                choices: [
+                    { text: '喝一口 (回复所有HP)', action: () => handleEventEffect('HEAL_FULL') },
+                    { text: '离开', action: () => handleEventEffect('LEAVE') }
+                ]
+            },
+            {
+                title: '遗落的背包',
+                description: '地上有一个看起来像是训练家遗落的背包。',
+                choices: [
+                    { text: '打开看看 (获得道具)', action: () => handleEventEffect('GET_ITEM') },
+                    { text: '无视', action: () => handleEventEffect('LEAVE') }
+                ]
+            },
+            {
+                title: '奇怪的雕像',
+                description: '一个古老的宝可梦雕像，似乎想要什么供品。',
+                choices: [
+                    { text: '献祭HP (失去HP，提升攻击)', action: () => handleEventEffect('TRADE_HP_ATK') },
+                    { text: '离开', action: () => handleEventEffect('LEAVE') }
+                ]
+            }
+        ];
+        const randomEvent = events[Math.floor(Math.random() * events.length)];
+
+        setGameState(prev => ({ 
+            ...prev, 
+            status: GameStatus.EVENT, 
+            loading: false,
+            eventData: randomEvent
+        }));
     }
+  };
+
+  const handleEventEffect = (effect: string) => {
+      setGameState(prev => {
+          let player = { ...prev.player };
+          let bag = [ ...prev.bag ];
+          let newMap = prev.map.map(n => n.id === prev.currentNodeId ? { ...n, completed: true } : n);
+
+          if (effect === 'HEAL_FULL') {
+              player.currentHp = player.maxHp;
+          } else if (effect === 'GET_ITEM') {
+              const itemKeys = Object.keys(ITEMS_DB);
+              const randomKey = itemKeys[Math.floor(Math.random() * itemKeys.length)];
+              const existingItem = bag.find(i => i.name === ITEMS_DB[randomKey].name); // loose match by name for simplicity
+              if (existingItem) {
+                  existingItem.count++;
+              } else {
+                  bag.push(createItem(randomKey));
+              }
+          } else if (effect === 'TRADE_HP_ATK') {
+              player.currentHp = Math.max(1, player.currentHp - 10);
+              player.stats.attack += 5;
+              player.stats.spAttack += 5;
+          }
+
+          return {
+              ...prev,
+              player,
+              bag,
+              map: newMap,
+              status: GameStatus.MAP,
+              eventData: null
+          };
+      });
   };
 
   // --- Combat Engine ---
@@ -132,24 +205,72 @@ const App: React.FC = () => {
   const calculateDamage = (attacker: Pokemon, defender: Pokemon, move: Move) => {
      if (move.category === MoveCategory.STATUS) return { damage: 0, typeEff: 0 };
 
-     // Basic Formula: ((2 * Level / 5 + 2) * Power * A / D) / 50 + 2
      const a = move.category === MoveCategory.PHYSICAL ? attacker.stats.attack : attacker.stats.spAttack;
      const d = move.category === MoveCategory.PHYSICAL ? defender.stats.defense : defender.stats.spDefense;
      
      let damage = ((2 * attacker.level / 5 + 2) * move.power * a / d) / 50 + 2;
 
-     // Modifiers
-     // STAB
      if (attacker.types.includes(move.type)) damage *= 1.5;
-     
-     // Type Effectiveness
      const typeEff = getEffectiveness(move.type, defender.types);
      damage *= typeEff;
-
-     // Random
      damage *= (Math.random() * 0.15 + 0.85);
 
      return { damage: Math.floor(damage), typeEff };
+  };
+
+  const useItemTurn = async (item: Item) => {
+      if (!gameState.currentEnemy || !canAct) return;
+      setCanAct(false);
+      
+      let logs = [...gameState.battleLog];
+      let player = { ...gameState.player };
+      let bag = [ ...gameState.bag ];
+
+      // Apply Item Effect
+      logs.push(`你使用了 ${item.name}!`);
+      
+      if (item.effectType === 'HEAL_HP') {
+          const healAmount = item.value;
+          player.currentHp = Math.min(player.maxHp, player.currentHp + healAmount);
+          logs.push(`${player.name} 回复了体力!`);
+      } else if (item.effectType === 'BUFF_ATK') {
+          player.stats.attack = Math.floor(player.stats.attack * item.value);
+          player.stats.spAttack = Math.floor(player.stats.spAttack * item.value);
+          logs.push(`${player.name} 的攻击力提高了!`);
+      } else if (item.effectType === 'BUFF_DEF') {
+          player.stats.defense = Math.floor(player.stats.defense * item.value);
+          player.stats.spDefense = Math.floor(player.stats.spDefense * item.value);
+          logs.push(`${player.name} 的防御力提高了!`);
+      }
+
+      // Consume Item
+      const itemIndex = bag.findIndex(i => i.id === item.id);
+      if (itemIndex > -1) {
+          bag[itemIndex].count--;
+          if (bag[itemIndex].count <= 0) {
+              bag.splice(itemIndex, 1);
+          }
+      }
+
+      setGameState(prev => ({ ...prev, player, bag, battleLog: logs }));
+      await new Promise(r => setTimeout(r, 1000));
+
+      // Enemy Turn
+      const enemy = { ...gameState.currentEnemy };
+      await enemyTurn(player, enemy, logs);
+  };
+
+  const enemyTurn = async (player: Pokemon, enemy: Pokemon, logs: string[]) => {
+      if (enemy.currentHp <= 0) return; // Should not happen but safety
+
+      const enemyMove = enemy.moves[Math.floor(Math.random() * enemy.moves.length)];
+      await performAction(enemy, player, enemyMove, logs, setGameState);
+      
+      if (player.currentHp <= 0) {
+          await handleFaint(player, logs, enemy);
+      } else {
+          setCanAct(true);
+      }
   };
 
   const executeTurn = async (playerMove: Move) => {
@@ -160,18 +281,15 @@ const App: React.FC = () => {
       const enemy = { ...gameState.currentEnemy };
       let logs = [...gameState.battleLog];
 
-      // Decrease PP
       const pMoveIdx = player.moves.findIndex(m => m.id === playerMove.id);
       if (pMoveIdx >= 0) player.moves[pMoveIdx].pp--;
 
-      // Determine Order
       const playerSpeed = player.stats.speed;
       const enemySpeed = enemy.stats.speed;
       let first = player;
       let second = enemy;
       let firstMove = playerMove;
       
-      // AI simple move selection
       const enemyMove = enemy.moves[Math.floor(Math.random() * enemy.moves.length)];
 
       let secondMove = enemyMove;
@@ -191,14 +309,12 @@ const App: React.FC = () => {
          playerGoesFirst = false;
       }
 
-      // Action 1
       await performAction(first, second, firstMove, logs, setGameState);
       if (second.currentHp <= 0) {
          await handleFaint(second, logs, playerGoesFirst ? enemy : player);
          return;
       }
 
-      // Action 2
       await new Promise(r => setTimeout(r, 1000));
       await performAction(second, first, secondMove, logs, setGameState);
       if (first.currentHp <= 0) {
@@ -227,7 +343,6 @@ const App: React.FC = () => {
              attacker.currentHp = Math.min(attacker.maxHp, attacker.currentHp + heal);
              logs.push(`${attacker.name} 回复了体力!`);
          } else if (move.effect === 'DEBUFF_DEF') {
-             // Simplify stat drops for this demo (no stages, just logs, maybe temp nerf logic later)
              logs.push(`${defender.name} 的防御降低了!`);
          }
       } else {
@@ -237,7 +352,6 @@ const App: React.FC = () => {
          if (typeEff > 1) logs.push("效果拔群!");
          if (typeEff < 1 && typeEff > 0) logs.push("效果不好...");
          if (typeEff === 0) logs.push("似乎没有效果...");
-         // logs.push(`(造成了 ${damage} 点伤害)`);
       }
       
       setState(prev => ({
@@ -257,10 +371,8 @@ const App: React.FC = () => {
           setGameState(prev => ({ ...prev, status: GameStatus.GAME_OVER }));
       } else {
           logs.push(`${winner.name} 获得了经验值!`);
-          // Level up logic (Simplified)
           winner.exp += 50; 
-          // Check level up
-          if (winner.exp >= 100) { // Simple threshold
+          if (winner.exp >= 100) { 
              winner.level++;
              winner.exp = 0;
              winner.maxHp += 5;
@@ -269,7 +381,7 @@ const App: React.FC = () => {
              winner.stats.spAttack += 2;
              winner.stats.spDefense += 2;
              winner.stats.speed += 2;
-             winner.currentHp = winner.maxHp; // Full heal on level up
+             winner.currentHp = winner.maxHp; 
              logs.push(`${winner.name} 升到了 Lv.${winner.level}!`);
           }
 
@@ -289,6 +401,16 @@ const App: React.FC = () => {
           options.push(createMove(key));
       }
       setRewardOptions(options);
+
+      // Chance for Item Reward
+      if (Math.random() > 0.5) {
+          const itemPool = REWARD_ITEMS_POOL;
+          const key = itemPool[Math.floor(Math.random() * itemPool.length)];
+          setRewardItem(createItem(key));
+      } else {
+          setRewardItem(null);
+      }
+
       setGameState(prev => ({ ...prev, status: GameStatus.REWARD }));
   };
 
@@ -299,18 +421,23 @@ const App: React.FC = () => {
               if (newPlayer.moves.length < 4) {
                   newPlayer.moves.push(move);
               } else {
-                  // Simply replace first move for now (UI constraint in simple version)
-                  // Or just don't learn if full? Let's replace random for MVP or first.
-                  // Real implementation needs a UI to "Forget Move".
-                  // Let's just replace the 0th move to keep it flowing.
                   newPlayer.moves[0] = move; 
               }
+          }
+          
+          // Add item if exists
+          let newBag = [...prev.bag];
+          if (rewardItem) {
+               const existing = newBag.find(i => i.name === rewardItem.name);
+               if (existing) existing.count++;
+               else newBag.push(rewardItem);
           }
 
           const newMap = prev.map.map(n => n.id === prev.currentNodeId ? { ...n, completed: true } : n);
           return {
               ...prev,
               player: newPlayer,
+              bag: newBag,
               map: newMap,
               status: GameStatus.MAP,
               currentEnemy: null
@@ -336,8 +463,6 @@ const App: React.FC = () => {
   };
 
   const runAway = () => {
-      // Simple logic: return to map, mark node not completed but unlock neighbors? No, just fail node.
-      // Or 100% run success for simplicity.
       setGameState(prev => ({
           ...prev,
           status: GameStatus.MAP,
@@ -428,7 +553,9 @@ const App: React.FC = () => {
           <BattleScene 
              player={gameState.player}
              enemy={gameState.currentEnemy}
+             bag={gameState.bag}
              onUseMove={executeTurn}
+             onUseItem={useItemTurn}
              onRun={runAway}
              battleLog={gameState.battleLog}
              isPlayerTurn={canAct}
@@ -438,11 +565,44 @@ const App: React.FC = () => {
     );
   }
 
+  if (gameState.status === GameStatus.EVENT && gameState.eventData) {
+      return (
+          <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-8">
+              <div className="max-w-lg w-full bg-gray-800 border-2 border-gray-600 rounded-lg p-8 shadow-2xl relative">
+                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-gray-900 p-4 rounded-full border-2 border-gray-600">
+                      <HelpCircle size={48} className="text-yellow-500" />
+                  </div>
+                  <h2 className="text-3xl font-display text-center mt-6 mb-4">{gameState.eventData.title}</h2>
+                  <p className="text-gray-300 text-center mb-8 leading-relaxed">{gameState.eventData.description}</p>
+                  
+                  <div className="flex flex-col gap-3">
+                      {gameState.eventData.choices.map((choice, idx) => (
+                          <Button key={idx} variant="secondary" onClick={choice.action} className="w-full text-left justify-center">
+                              {choice.text}
+                          </Button>
+                      ))}
+                  </div>
+              </div>
+          </div>
+      )
+  }
+
   if (gameState.status === GameStatus.REWARD) {
      return (
        <div className="min-h-screen bg-gray-900/95 text-white flex flex-col items-center justify-center p-8 z-50 absolute inset-0">
           <h2 className="text-3xl font-display text-yellow-400 mb-2">战斗胜利!</h2>
-          <p className="mb-8 text-gray-400">你的宝可梦变得更强了。选择一个新招式来学习 (将替换第一个招式):</p>
+          
+          {rewardItem && (
+             <div className="mb-8 bg-gray-800 p-4 rounded-lg border border-gray-600 flex items-center gap-4 animate-bounce">
+                <Gift className="text-yellow-400" size={32} />
+                <div>
+                   <p className="text-sm text-gray-400">获得道具</p>
+                   <p className="font-bold text-lg text-white">{rewardItem.name}</p>
+                </div>
+             </div>
+          )}
+
+          <p className="mb-8 text-gray-400">选择一个新招式来学习 (将替换第一个招式):</p>
           
           <div className="flex gap-6 mb-12 flex-wrap justify-center">
              {rewardOptions.map(move => (

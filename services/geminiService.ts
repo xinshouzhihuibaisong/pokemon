@@ -1,8 +1,8 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { Pokemon, PokemonType, NodeType, MoveCategory, Move } from '../types';
+import { GET_TIER_POOL, createMove } from '../constants';
 
-// Safely retrieve API key without crashing if 'process' is undefined (common in browser/Vite envs)
 const getApiKey = () => {
   try {
     return (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : '';
@@ -12,7 +12,6 @@ const getApiKey = () => {
   }
 };
 
-// Lazy initialization of AI client
 let aiInstance: GoogleGenAI | null = null;
 const getAI = () => {
   if (!aiInstance) {
@@ -22,20 +21,19 @@ const getAI = () => {
 };
 
 const MODEL_NAME = 'gemini-2.5-flash';
-
 const uuid = () => Math.random().toString(36).substring(2, 9);
 
 export const generateEnemy = async (floor: number, type: NodeType): Promise<Pokemon> => {
+  // Use fallback immediately if no API key is potentially available (save time)
+  // But strictly speaking we should try. For now, let's try if key exists.
   if (!getApiKey()) {
-    console.log("No API Key found, using fallback enemy.");
-    return generateFallbackEnemy(floor);
+    console.log("No API Key found, using local enemy pool.");
+    return generateFallbackEnemy(floor, type);
   }
 
   const isBoss = type === NodeType.BOSS;
   const isElite = type === NodeType.ELITE;
   const level = 5 + floor * 2 + (isBoss ? 5 : 0);
-  
-  // Adjusted HP scale for Pokemon stats
   const hpScale = isBoss ? 200 : isElite ? 100 : 40 + (floor * 5);
 
   const systemInstruction = `
@@ -47,13 +45,11 @@ export const generateEnemy = async (floor: number, type: NodeType): Promise<Poke
     
     The Pokemon must have:
     - name (Chinese)
-    - types (Array of strings: Fire, Water, Grass, Normal, etc.)
+    - englishName (for sprites)
+    - types (Array of strings from: Fire, Water, Grass, Normal, Electric, Ice, Fighting, Poison, Ground, Flying, Psychic, Bug, Rock, Ghost, Dragon, Steel, Dark, Fairy)
     - stats: { hp, attack, defense, spAttack, spDefense, speed } (Base stats scaled to level ${level})
     - maxHp (Should be around ${hpScale})
     - moves: Array of 3-4 moves. Each move needs: name, type, category (Physical/Special/Status), power, accuracy, pp, maxPp.
-    - image: A URL to a static image or gif (use specific pokemon name in URL if possible, e.g. from pokemondb or similar, otherwise a placeholder).
-      Ideally: "https://img.pokemondb.net/sprites/black-white/anim/normal/[lowercase_english_name].gif"
-      You MUST provide the englishName for the URL generation.
   `;
 
   try {
@@ -110,7 +106,7 @@ export const generateEnemy = async (floor: number, type: NodeType): Promise<Poke
       id: `enemy-${Date.now()}`,
       name: data.name || "Unknown",
       level: level,
-      types: data.types as PokemonType[] || [PokemonType.NORMAL],
+      types: data.types as PokemonType[],
       stats: data.stats,
       currentHp: data.maxHp,
       maxHp: data.maxHp,
@@ -122,28 +118,45 @@ export const generateEnemy = async (floor: number, type: NodeType): Promise<Poke
     };
   } catch (error) {
     console.error("Gemini generation failed:", error);
-    return generateFallbackEnemy(floor);
+    return generateFallbackEnemy(floor, type);
   }
 };
 
-const generateFallbackEnemy = (floor: number): Pokemon => {
-  const level = 5 + floor;
+const generateFallbackEnemy = (floor: number, type: NodeType): Pokemon => {
+  const isBoss = type === NodeType.BOSS;
+  const isElite = type === NodeType.ELITE;
+  const level = 5 + floor * (isBoss ? 3 : 2);
+  
+  const pool = GET_TIER_POOL(floor, isBoss, isElite);
+  const template = pool[Math.floor(Math.random() * pool.length)];
+  
+  // Scale stats based on level difference from base? 
+  // For simplicity, we just take base stats + level bonuses
+  const hpMultiplier = isBoss ? 5 : isElite ? 3 : 2;
+  const statMultiplier = 1 + (level / 50);
+
+  const maxHp = Math.floor(template.stats.hp * hpMultiplier + (level * 2));
+  
   return {
-    id: `fallback-${Date.now()}`,
-    name: "小拉达",
+    id: `enemy-${Date.now()}`,
+    name: template.name,
     level: level,
-    types: [PokemonType.NORMAL],
-    stats: { hp: 30, attack: 56, defense: 35, spAttack: 25, spDefense: 35, speed: 72 },
-    currentHp: 30 + (floor * 5),
-    maxHp: 30 + (floor * 5),
+    types: template.types,
+    stats: {
+        hp: template.stats.hp,
+        attack: Math.floor(template.stats.attack * statMultiplier),
+        defense: Math.floor(template.stats.defense * statMultiplier),
+        spAttack: Math.floor(template.stats.spAttack * statMultiplier),
+        spDefense: Math.floor(template.stats.spDefense * statMultiplier),
+        speed: Math.floor(template.stats.speed * statMultiplier),
+    },
+    currentHp: maxHp,
+    maxHp: maxHp,
     exp: 0,
     maxExp: 0,
     isPlayer: false,
-    image: "https://img.pokemondb.net/sprites/black-white/anim/normal/rattata.gif",
-    moves: [
-      { id: 'm1', name: '撞击', type: PokemonType.NORMAL, category: MoveCategory.PHYSICAL, power: 40, accuracy: 100, pp: 35, maxPp: 35, description: '撞击' },
-      { id: 'm2', name: '必杀门牙', type: PokemonType.NORMAL, category: MoveCategory.PHYSICAL, power: 80, accuracy: 90, pp: 15, maxPp: 15, description: '必杀门牙' }
-    ]
+    image: `https://img.pokemondb.net/sprites/black-white/anim/normal/${template.englishName}.gif`,
+    moves: template.moves.map(m => createMove(m)).filter(m => m.id) // Ensure valid moves
   };
 }
 
