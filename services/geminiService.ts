@@ -2,13 +2,32 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Pokemon, PokemonType, NodeType, MoveCategory, Move } from '../types';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Safely retrieve API key without crashing if 'process' is undefined (common in browser/Vite envs)
+const getApiKey = () => {
+  try {
+    return (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : '';
+  } catch (e) {
+    console.warn("Could not access process.env");
+    return '';
+  }
+};
+
+// Lazy initialization of AI client
+let aiInstance: GoogleGenAI | null = null;
+const getAI = () => {
+  if (!aiInstance) {
+    aiInstance = new GoogleGenAI({ apiKey: getApiKey() });
+  }
+  return aiInstance;
+};
+
 const MODEL_NAME = 'gemini-2.5-flash';
 
 const uuid = () => Math.random().toString(36).substring(2, 9);
 
 export const generateEnemy = async (floor: number, type: NodeType): Promise<Pokemon> => {
-  if (!process.env.API_KEY) {
+  if (!getApiKey()) {
+    console.log("No API Key found, using fallback enemy.");
     return generateFallbackEnemy(floor);
   }
 
@@ -34,11 +53,11 @@ export const generateEnemy = async (floor: number, type: NodeType): Promise<Poke
     - moves: Array of 3-4 moves. Each move needs: name, type, category (Physical/Special/Status), power, accuracy, pp, maxPp.
     - image: A URL to a static image or gif (use specific pokemon name in URL if possible, e.g. from pokemondb or similar, otherwise a placeholder).
       Ideally: "https://img.pokemondb.net/sprites/black-white/anim/normal/[lowercase_english_name].gif"
-      You MUST provide the english name for the URL generation.
+      You MUST provide the englishName for the URL generation.
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_NAME,
       contents: `Generate a ${isBoss ? 'Legendary Boss' : 'Wild'} Pokemon for floor ${floor}.`,
       config: {
@@ -129,13 +148,13 @@ const generateFallbackEnemy = (floor: number): Pokemon => {
 }
 
 export const generateEventResult = async (context: string, choice: string): Promise<string> => {
-   if (!process.env.API_KEY) return "你继续前进。";
+   if (!getApiKey()) return "你继续前进。";
    try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_NAME,
       contents: `Game Context: ${context}. Player chose: ${choice}. Describe outcome in Chinese (2 sentences).`,
     });
-    return response.text;
+    return response.text || "发生了神秘的事情...";
    } catch (e) {
      return "发生了神秘的事情...";
    }
